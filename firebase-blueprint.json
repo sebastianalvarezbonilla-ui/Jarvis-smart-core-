@@ -1,0 +1,346 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe user profile without PII such as email.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name shown in the console",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Profile avatar URL",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": ["uid", "displayName", "photoUrl", "createdAt", "updatedAt"]
+    },
+    "UserPrivateAccount": {
+      "title": "UserPrivateAccount",
+      "description": "Isolated private account settings and PII email.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "requireLoginOnStart": {
+          "type": "boolean"
+        },
+        "lastLoginAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "requireLoginOnStart", "lastLoginAt", "updatedAt"]
+    },
+    "UserPreferences": {
+      "title": "UserPreferences",
+      "description": "Synchronized Jarvis Smart Core preferences for the account.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "activePreset": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "engineRoute": {
+          "type": "string",
+          "enum": ["local-first-hybrid", "cloud-reasoning", "low-latency-edge"],
+          "maxLength": 40
+        },
+        "activeVoice": {
+          "type": "string",
+          "enum": ["Charon", "Kore", "Zephyr", "Puck", "Fenrir"],
+          "maxLength": 20
+        },
+        "voiceStyle": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "ttsModel": {
+          "type": "string",
+          "enum": ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"],
+          "maxLength": 50
+        },
+        "playbackRate": {
+          "type": "number"
+        },
+        "autoSpeak": {
+          "type": "boolean"
+        },
+        "darkMode": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "activePreset",
+        "engineRoute",
+        "activeVoice",
+        "voiceStyle",
+        "ttsModel",
+        "playbackRate",
+        "autoSpeak",
+        "darkMode",
+        "updatedAt"
+      ]
+    },
+    "UserMemoryNote": {
+      "title": "UserMemoryNote",
+      "description": "Personal memory note saved for the signed-in user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["preferencia", "proyecto", "persona", "contexto"],
+          "maxLength": 32
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "category", "content", "createdAtLabel", "createdAt", "updatedAt"]
+    },
+    "UserConnectedApp": {
+      "title": "UserConnectedApp",
+      "description": "Device or webhook application registered by the user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "appType": {
+          "type": "string",
+          "enum": ["device_app", "pwa_web", "rest_api", "webhook", "mcp_bridge", "local_service"],
+          "maxLength": 30
+        },
+        "platform": {
+          "type": "string",
+          "enum": ["desktop", "mobile", "web", "localhost"],
+          "maxLength": 20
+        },
+        "launchUri": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "packageOrExecutable": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 240
+        },
+        "executionMode": {
+          "type": "string",
+          "enum": ["server_proxy", "browser_local"],
+          "maxLength": 30
+        },
+        "baseUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "healthPath": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "defaultMethod": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "DELETE"],
+          "maxLength": 10
+        },
+        "description": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"],
+          "maxLength": 20
+        },
+        "lastCheckStatus": {
+          "type": "string",
+          "enum": ["online", "offline", "unknown"],
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "name",
+        "appType",
+        "platform",
+        "launchUri",
+        "packageOrExecutable",
+        "executionMode",
+        "baseUrl",
+        "healthPath",
+        "defaultMethod",
+        "description",
+        "status",
+        "lastCheckStatus",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserChatMessage": {
+      "title": "UserChatMessage",
+      "description": "Text chat history entry synced to the user account without binary payloads.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"],
+          "maxLength": 20
+        },
+        "content": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 16000
+        },
+        "timestampLabel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "preset": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "agentLabel": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 120
+        },
+        "modelUsed": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 80
+        },
+        "latencyMs": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "role", "content", "timestampLabel", "preset", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner profile display metadata (no PII)."
+    },
+    "/users/{userId}/private/account": {
+      "schema": { "$ref": "#/entities/UserPrivateAccount" },
+      "description": "Owner-only private PII email and session gate setting."
+    },
+    "/users/{userId}/private/preferences": {
+      "schema": { "$ref": "#/entities/UserPreferences" },
+      "description": "Owner-only synced console preferences."
+    },
+    "/users/{userId}/memories/{memoryId}": {
+      "schema": { "$ref": "#/entities/UserMemoryNote" },
+      "description": "Owner-only personal memory notes."
+    },
+    "/users/{userId}/connectedApps/{appId}": {
+      "schema": { "$ref": "#/entities/UserConnectedApp" },
+      "description": "Owner-only connected and device applications."
+    },
+    "/users/{userId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/UserChatMessage" },
+      "description": "Owner-only recent text chat transcript."
+    }
+  }
+}

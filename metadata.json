@@ -1,0 +1,11 @@
+{
+  "name": "Jarvis Smart Core",
+  "description": "Consola personal de IA con memoria, agentes configurables, voces neuronales, trazas de ejecución, constructor de apps, router inteligente, espectador en vivo, estudio de video, buscador web y agente autónomo.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

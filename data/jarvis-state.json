@@ -1,0 +1,32 @@
+{
+  "memories": [
+    {
+      "id": "mem-init-1",
+      "category": "preferencia",
+      "content": "Idioma principal en español con respuestas directas y listas para lectura en voz alta.",
+      "createdAt": "Inicial"
+    },
+    {
+      "id": "mem-init-2",
+      "category": "proyecto",
+      "content": "Consola Jarvis Smart Core con agentes configurables, constructor web, router, espectador y estudio de video.",
+      "createdAt": "Inicial"
+    }
+  ],
+  "customAgents": [],
+  "publishedApps": [],
+  "connectedApps": [],
+  "routerProfiles": [],
+  "traces": [],
+  "messages": [],
+  "prefs": {
+    "activePreset": "chat-simple",
+    "engineRoute": "local-first-hybrid",
+    "activeVoice": "Charon",
+    "voiceStyle": "Sereno, articulado, tono de asistente personal técnico con pausas claras",
+    "ttsModel": "gemini-3.8-flash-lite-tts",
+    "playbackRate": 1,
+    "autoSpeak": false,
+    "darkMode": true
+  }
+}

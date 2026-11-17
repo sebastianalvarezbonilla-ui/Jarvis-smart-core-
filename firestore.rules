@@ -1,0 +1,344 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isSignedIn() && request.auth.token.email_verified == true && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'photoUrl', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'photoUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 100
+        && data.photoUrl is string
+        && data.photoUrl.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateAccount(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'requireLoginOnStart', 'lastLoginAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'requireLoginOnStart', 'lastLoginAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 200
+        && data.requireLoginOnStart is bool
+        && data.lastLoginAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspacePrefs(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'activePreset',
+          'engineRoute',
+          'activeVoice',
+          'voiceStyle',
+          'ttsModel',
+          'playbackRate',
+          'autoSpeak',
+          'darkMode',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'activePreset',
+          'engineRoute',
+          'activeVoice',
+          'voiceStyle',
+          'ttsModel',
+          'playbackRate',
+          'autoSpeak',
+          'darkMode',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.activePreset is string
+        && data.activePreset.size() >= 1
+        && data.activePreset.size() <= 80
+        && data.engineRoute in ['local-first-hybrid', 'cloud-reasoning', 'low-latency-edge']
+        && data.activeVoice in ['Charon', 'Kore', 'Zephyr', 'Puck', 'Fenrir']
+        && data.voiceStyle is string
+        && data.voiceStyle.size() <= 300
+        && data.ttsModel in ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts']
+        && (data.playbackRate is number)
+        && data.playbackRate >= 0.5
+        && data.playbackRate <= 2.5
+        && data.autoSpeak is bool
+        && data.darkMode is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMemoryNote(data, userId) {
+      return data.keys().hasAll(['uid', 'category', 'content', 'createdAtLabel', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'category', 'content', 'createdAtLabel', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.category in ['preferencia', 'proyecto', 'persona', 'contexto']
+        && data.content is string
+        && data.content.size() >= 1
+        && data.content.size() <= 4000
+        && data.createdAtLabel is string
+        && data.createdAtLabel.size() >= 1
+        && data.createdAtLabel.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidConnectedApp(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'name',
+          'appType',
+          'platform',
+          'launchUri',
+          'packageOrExecutable',
+          'executionMode',
+          'baseUrl',
+          'healthPath',
+          'defaultMethod',
+          'description',
+          'status',
+          'lastCheckStatus',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'name',
+          'appType',
+          'platform',
+          'launchUri',
+          'packageOrExecutable',
+          'executionMode',
+          'baseUrl',
+          'healthPath',
+          'defaultMethod',
+          'description',
+          'status',
+          'lastCheckStatus',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.appType in ['device_app', 'pwa_web', 'rest_api', 'webhook', 'mcp_bridge', 'local_service']
+        && data.platform in ['desktop', 'mobile', 'web', 'localhost']
+        && data.launchUri is string
+        && data.launchUri.size() <= 500
+        && data.packageOrExecutable is string
+        && data.packageOrExecutable.size() <= 240
+        && data.executionMode in ['server_proxy', 'browser_local']
+        && data.baseUrl is string
+        && data.baseUrl.size() <= 500
+        && data.healthPath is string
+        && data.healthPath.size() <= 200
+        && data.defaultMethod in ['GET', 'POST', 'PUT', 'DELETE']
+        && data.description is string
+        && data.description.size() <= 1000
+        && data.status in ['active', 'paused']
+        && data.lastCheckStatus in ['online', 'offline', 'unknown']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, userId) {
+      return data.keys().hasAll(['uid', 'role', 'content', 'timestampLabel', 'preset', 'createdAt'])
+        && data.keys().hasOnly([
+          'uid',
+          'role',
+          'content',
+          'timestampLabel',
+          'preset',
+          'agentLabel',
+          'modelUsed',
+          'latencyMs',
+          'createdAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.role in ['user', 'assistant']
+        && data.content is string
+        && data.content.size() <= 16000
+        && data.timestampLabel is string
+        && data.timestampLabel.size() >= 1
+        && data.timestampLabel.size() <= 40
+        && data.preset is string
+        && data.preset.size() >= 1
+        && data.preset.size() <= 80
+        && (!('agentLabel' in data) || (data.agentLabel is string && data.agentLabel.size() <= 120))
+        && (!('modelUsed' in data) || (data.modelUsed is string && data.modelUsed.size() <= 80))
+        && (!('latencyMs' in data) || (data.latencyMs is number && data.latencyMs >= 0))
+        && data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isVerifiedOwner(userId);
+      allow create: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoUrl', 'updatedAt']);
+
+      match /private/account {
+        allow get: if isValidId(userId) && isVerifiedOwner(userId);
+        allow create: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().lastLoginAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['email', 'lastLoginAt', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['requireLoginOnStart', 'updatedAt'])
+          );
+      }
+
+      match /private/preferences {
+        allow get: if isValidId(userId) && isVerifiedOwner(userId);
+        allow create: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && isValidWorkspacePrefs(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && isValidWorkspacePrefs(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'activePreset',
+            'engineRoute',
+            'activeVoice',
+            'voiceStyle',
+            'ttsModel',
+            'playbackRate',
+            'autoSpeak',
+            'darkMode',
+            'updatedAt'
+          ]);
+      }
+
+      match /memories/{memoryId} {
+        allow get: if isValidId(userId) && isValidId(memoryId) && isVerifiedOwner(userId);
+        allow list: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(memoryId)
+          && isVerifiedOwner(userId)
+          && isValidMemoryNote(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(memoryId)
+          && isVerifiedOwner(userId)
+          && isValidMemoryNote(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['category', 'content', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(memoryId) && isVerifiedOwner(userId);
+      }
+
+      match /connectedApps/{appId} {
+        allow get: if isValidId(userId) && isValidId(appId) && isVerifiedOwner(userId);
+        allow list: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(appId)
+          && isVerifiedOwner(userId)
+          && isValidConnectedApp(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(appId)
+          && isVerifiedOwner(userId)
+          && isValidConnectedApp(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['lastCheckStatus', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'appType',
+              'platform',
+              'launchUri',
+              'packageOrExecutable',
+              'executionMode',
+              'baseUrl',
+              'healthPath',
+              'defaultMethod',
+              'description',
+              'status',
+              'lastCheckStatus',
+              'updatedAt'
+            ])
+          );
+        allow delete: if isValidId(userId) && isValidId(appId) && isVerifiedOwner(userId);
+      }
+
+      match /messages/{messageId} {
+        allow get: if isValidId(userId) && isValidId(messageId) && isVerifiedOwner(userId);
+        allow list: if isValidId(userId)
+          && isVerifiedOwner(userId)
+          && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(messageId)
+          && isVerifiedOwner(userId)
+          && isValidChatMessage(incoming(), userId)
+          && incoming().createdAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(messageId) && isVerifiedOwner(userId);
+      }
+    }
+  }
+}
