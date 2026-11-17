@@ -48,6 +48,7 @@ import {
   type ConnectedAppRecord,
   type EngineRouteId,
   type JarvisPreferences,
+  type LaunchAction,
   type MemoryCategory,
   type MemoryNote,
   type NavTabId,
@@ -132,6 +133,7 @@ export default function App() {
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const streamHandleRef = useRef<StreamPlaybackHandle | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   // Sync darkMode class on <html>
   useEffect(() => {
@@ -157,7 +159,17 @@ export default function App() {
           if (Array.isArray(data.connectedApps)) setConnectedApps(data.connectedApps);
           if (Array.isArray(data.routerProfiles)) setRouterProfiles(data.routerProfiles);
           if (Array.isArray(data.traces)) setTraces(data.traces);
-          if (Array.isArray(data.messages)) setMessages(data.messages);
+          if (Array.isArray(data.messages)) {
+            const cleanMsgs = (data.messages as ChatMessage[])
+              .filter(
+                (m) =>
+                  m &&
+                  ((typeof m.content === 'string' && m.content.trim().length > 0) ||
+                    (Array.isArray(m.attachments) && m.attachments.length > 0))
+              )
+              .map((m) => ({ ...m, streaming: false }));
+            setMessages(cleanMsgs);
+          }
           if (data.prefs) setPrefs((p) => ({ ...p, ...data.prefs }));
         }
       } catch {
@@ -185,18 +197,25 @@ export default function App() {
           connectedApps,
           routerProfiles,
           traces: traces.slice(0, 200),
-          messages: messages.slice(-60).map((m) => ({
-            ...m,
-            streaming: undefined,
-            audioBase64: undefined, // keep state file compact
-            attachments: m.attachments?.map((att) => ({
-              id: att.id,
-              name: att.name,
-              mimeType: att.mimeType,
-              data: '',
-              previewUrl: att.previewUrl,
+          messages: messages
+            .filter(
+              (m) =>
+                !m.streaming &&
+                (m.content.trim().length > 0 || (m.attachments && m.attachments.length > 0))
+            )
+            .slice(-60)
+            .map((m) => ({
+              ...m,
+              streaming: undefined,
+              audioBase64: undefined, // keep state file compact
+              attachments: m.attachments?.map((att) => ({
+                id: att.id,
+                name: att.name,
+                mimeType: att.mimeType,
+                data: '',
+                previewUrl: att.previewUrl,
+              })),
             })),
-          })),
           prefs,
         }),
       }).catch(() => {});
@@ -605,6 +624,25 @@ export default function App() {
     [prefs.activeVoice, prefs.voiceStyle, previewingVoice, speakTextDirect, stopAllAudio]
   );
 
+  const triggerLaunchAction = useCallback((act: LaunchAction): boolean => {
+    const uri = act.launchUri;
+    if (!uri) return false;
+    const isHttp = /^https?:\/\//i.test(uri);
+    try {
+      const link = document.createElement('a');
+      link.href = uri;
+      link.target = isHttp ? '_blank' : '_self';
+      link.rel = 'noopener noreferrer';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      window.setTimeout(() => link.remove(), 300);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const handleSendMessage = async (
     text: string,
     options?: {
@@ -649,11 +687,17 @@ export default function App() {
       setMessages((prev) => [...prev.slice(0, -1), streamingPlaceholder]);
     }
 
+    chatAbortRef.current?.abort();
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+    let streamedText = '';
+
     setIsSending(true);
     try {
       const res = await fetch('/api/jarvis/chat-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           message: text.trim(),
           attachments: attachments.map((att) => ({
@@ -707,7 +751,34 @@ export default function App() {
       const decoder = new TextDecoder();
       let buffer = '';
       let finalPayload: Record<string, any> | null = null;
-      let streamedText = '';
+
+      const processSseBlock = (block: string) => {
+        const line = block.split('\n').find((l) => l.startsWith('data: '));
+        if (!line) return;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) return;
+        let evt: Record<string, any>;
+        try {
+          evt = JSON.parse(jsonStr) as Record<string, any>;
+        } catch {
+          return;
+        }
+        if (evt.error) {
+          throw new Error(String(evt.error));
+        }
+        if (typeof evt.delta === 'string' && evt.delta.length > 0) {
+          streamedText += evt.delta;
+          const currentText = streamedText;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === streamingId ? { ...m, content: currentText } : m
+            )
+          );
+        }
+        if (evt.done) {
+          finalPayload = evt;
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -715,35 +786,21 @@ export default function App() {
         buffer += decoder.decode(value, { stream: true });
         const blocks = buffer.split('\n\n');
         buffer = blocks.pop() ?? '';
-
         for (const block of blocks) {
-          const line = block.split('\n').find((l) => l.startsWith('data: '));
-          if (!line) continue;
-          const jsonStr = line.slice(6).trim();
-          if (!jsonStr) continue;
-          const evt = JSON.parse(jsonStr) as Record<string, any>;
-
-          if (evt.error) {
-            throw new Error(String(evt.error));
-          }
-
-          if (typeof evt.delta === 'string' && evt.delta.length > 0) {
-            streamedText += evt.delta;
-            const currentText = streamedText;
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === streamingId ? { ...m, content: currentText } : m
-              )
-            );
-          }
-
-          if (evt.done) {
-            finalPayload = evt;
-          }
+          processSseBlock(block);
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) {
+        for (const block of buffer.split('\n\n')) {
+          processSseBlock(block);
         }
       }
 
-      const data = finalPayload || { reply: streamedText || 'Listo.' };
+      const data: Record<string, any> =
+        (finalPayload as Record<string, any> | null) ?? {
+          reply: streamedText || 'Listo.',
+        };
 
       // Apply tool side-effects
       if (Array.isArray(data.addedMemories) && data.addedMemories.length > 0) {
@@ -805,6 +862,17 @@ export default function App() {
         }
       }
 
+      const rawLaunchActions: LaunchAction[] | undefined = Array.isArray(data.launchActions)
+        ? (data.launchActions as LaunchAction[]).map((act) => {
+            const shouldAutoClick = act.autoClick !== false;
+            const clicked = shouldAutoClick ? triggerLaunchAction(act) : false;
+            return {
+              ...act,
+              autoClicked: clicked,
+            };
+          })
+        : undefined;
+
       const assistantMsg: ChatMessage = {
         id: streamingId,
         role: 'assistant',
@@ -818,7 +886,7 @@ export default function App() {
         outputTokens: data.outputTokens,
         toolsUsed: data.toolsUsed,
         sources: data.sources,
-        launchActions: Array.isArray(data.launchActions) ? data.launchActions : undefined,
+        launchActions: rawLaunchActions,
         streaming: false,
       };
 
@@ -849,36 +917,54 @@ export default function App() {
         handleSpeakMessage(assistantMsg, data.nextVoice as VoiceId | undefined);
       }
     } catch (err) {
-      const msgText =
-        err instanceof Error ? err.message : 'Error al comunicar con Jarvis.';
-      const errMsg: ChatMessage = {
-        id: streamingId,
-        role: 'assistant',
-        content: msgText,
-        timestamp: formatTime(),
-        preset: presetConfig.id,
-        agentLabel: presetConfig.label,
-        streaming: false,
-        error: true,
-      };
-      setMessages((prev) =>
-        prev.map((m) => (m.id === streamingId ? errMsg : m))
-      );
-      appendTrace({
-        operation: 'chat',
-        preset: presetConfig.label,
-        model: 'gemini-3.1-flash-lite',
-        latencyMs: 0,
-        promptTokens: 0,
-        outputTokens: 0,
-        estimatedEnergyWh: 0,
-        toolsUsed: [],
-        status: 'error',
-      });
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setMessages((prev) =>
+          streamedText.trim()
+            ? prev.map((m) =>
+                m.id === streamingId ? { ...m, content: streamedText, streaming: false } : m
+              )
+            : prev.filter((m) => m.id !== streamingId)
+        );
+      } else {
+        const msgText =
+          err instanceof Error ? err.message : 'Error al comunicar con Jarvis.';
+        const errMsg: ChatMessage = {
+          id: streamingId,
+          role: 'assistant',
+          content: msgText,
+          timestamp: formatTime(),
+          preset: presetConfig.id,
+          agentLabel: presetConfig.label,
+          streaming: false,
+          error: true,
+        };
+        setMessages((prev) =>
+          prev.map((m) => (m.id === streamingId ? errMsg : m))
+        );
+        appendTrace({
+          operation: 'chat',
+          preset: presetConfig.label,
+          model: 'gemini-3.1-flash-lite',
+          latencyMs: 0,
+          promptTokens: 0,
+          outputTokens: 0,
+          estimatedEnergyWh: 0,
+          toolsUsed: [],
+          status: 'error',
+          detail: msgText,
+        });
+      }
     } finally {
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null;
+      }
       setIsSending(false);
     }
   };
+
+  const handleStopChat = useCallback(() => {
+    chatAbortRef.current?.abort();
+  }, []);
 
   const handleRetryLast = () => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -970,6 +1056,7 @@ export default function App() {
             }
             isSending={isSending}
             onSendMessage={(txt, opts) => void handleSendMessage(txt, opts)}
+            onStopChat={handleStopChat}
             onRetryLast={handleRetryLast}
             onClearChat={() => setMessages([])}
             playingMessageId={playingMessageId}

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   Camera,
+  Check,
+  Copy,
   ExternalLink,
   ImagePlus,
   Loader2,
@@ -44,6 +46,7 @@ interface AssistantViewProps {
   onToggleAutoSpeak: () => void;
   isSending: boolean;
   onSendMessage: (text: string, options?: SendMessageOptions) => void;
+  onStopChat?: () => void;
   onRetryLast: () => void;
   onClearChat: () => void;
   playingMessageId: string | null;
@@ -215,6 +218,7 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   onToggleAutoSpeak,
   isSending,
   onSendMessage,
+  onStopChat,
   onRetryLast,
   onClearChat,
   playingMessageId,
@@ -229,6 +233,8 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   const [lightboxImage, setLightboxImage] = useState<{ src: string; name: string } | null>(
     null
   );
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const copyResetTimerRef = useRef<number | null>(null);
 
   // Manual push-to-talk dictation
   const [isRecording, setIsRecording] = useState(false);
@@ -517,8 +523,52 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
   useEffect(() => {
     return () => {
       stopWakeRecognition();
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
     };
   }, [stopWakeRecognition]);
+
+  const handleCopyMessage = useCallback(async (msg: ChatMessage) => {
+    const text = msg.content || '';
+    if (!text) return;
+
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied) {
+      try {
+        const helper = document.createElement('textarea');
+        helper.value = text;
+        helper.setAttribute('readonly', '');
+        helper.style.position = 'fixed';
+        helper.style.opacity = '0';
+        document.body.appendChild(helper);
+        helper.select();
+        copied = document.execCommand('copy');
+        document.body.removeChild(helper);
+      } catch {
+        copied = false;
+      }
+    }
+
+    if (copied) {
+      setCopiedMessageId(msg.id);
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
+        setCopiedMessageId((prev) => (prev === msg.id ? null : prev));
+      }, 1800);
+    }
+  }, []);
 
   const toggleWakeWordMode = () => {
     setMicError(null);
@@ -883,16 +933,42 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                     {msg.launchActions && msg.launchActions.length > 0 ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         {msg.launchActions.map((act) => (
-                          <a
-                            key={act.id}
-                            href={act.launchUri}
-                            target={act.launchUri.startsWith('http') ? '_blank' : '_self'}
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/15 px-3.5 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            <span>Abrir {act.name}</span>
-                          </a>
+                          <React.Fragment key={act.id}>
+                            <a
+                              href={act.launchUri}
+                              target={act.launchUri.startsWith('http') ? '_blank' : '_self'}
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/15 px-3.5 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/25"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              <span>
+                                {act.launchUri.startsWith('http')
+                                  ? `Abrir ${act.name} Web`
+                                  : `Abrir ${act.name}`}
+                              </span>
+                            </a>
+                            {act.fallbackUri ? (
+                              <a
+                                href={act.fallbackUri}
+                                target={act.fallbackUri.startsWith('http') ? '_blank' : '_self'}
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-xl border border-border/70 bg-card/70 px-3 py-2 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                <span>
+                                  {act.fallbackUri.startsWith('http')
+                                    ? `${act.name} Web`
+                                    : `App ${act.name}`}
+                                </span>
+                              </a>
+                            ) : null}
+                            {act.autoClicked ? (
+                              <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                                <Check className="h-3.5 w-3.5" />
+                                <span>Clic automático ejecutado</span>
+                              </span>
+                            ) : null}
+                          </React.Fragment>
                         ))}
                       </div>
                     ) : null}
@@ -931,41 +1007,64 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                       ) : null}
 
                       {!msg.streaming ? (
-                        !msg.error ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isSpeaking ? onStopAudio() : onSpeakMessage(msg)
-                            }
-                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
-                          >
-                            {isSynthesizing ? (
-                              <>
-                                <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                                <span>sintetizando</span>
-                              </>
-                            ) : isSpeaking ? (
-                              <>
-                                <Square className="h-3 w-3 text-primary" />
-                                <span>detener</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="h-3 w-3" />
-                                <span>escuchar</span>
-                              </>
-                            )}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={onRetryLast}
-                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-primary hover:bg-accent"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            <span>Reintentar</span>
-                          </button>
-                        )
+                        <>
+                          {!msg.error ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isSpeaking ? onStopAudio() : onSpeakMessage(msg)
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
+                            >
+                              {isSynthesizing ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                                  <span>sintetizando</span>
+                                </>
+                              ) : isSpeaking ? (
+                                <>
+                                  <Square className="h-3 w-3 text-primary" />
+                                  <span>detener</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="h-3 w-3" />
+                                  <span>escuchar</span>
+                                </>
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={onRetryLast}
+                              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-primary hover:bg-accent"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              <span>Reintentar</span>
+                            </button>
+                          )}
+                          {msg.content ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyMessage(msg)}
+                              aria-label="Copiar respuesta"
+                              title="Copiar respuesta"
+                              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
+                            >
+                              {copiedMessageId === msg.id ? (
+                                <>
+                                  <Check className="h-3 w-3 text-emerald-400" />
+                                  <span className="text-emerald-400">copiado</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3 w-3" />
+                                  <span>copiar</span>
+                                </>
+                              )}
+                            </button>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                   </div>
@@ -1214,19 +1313,27 @@ export const AssistantView: React.FC<AssistantViewProps> = ({
                 <span>{autoSpeak ? 'Auto-voz: Sí' : 'Auto-voz'}</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={(!input.trim() && pendingAttachments.length === 0) || isSending}
-                aria-label="Enviar mensaje"
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {isSending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
+              {isSending ? (
+                <button
+                  type="button"
+                  onClick={() => onStopChat?.()}
+                  aria-label="Detener respuesta"
+                  title="Detener generación"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-primary/40 bg-primary/15 text-primary transition-colors hover:bg-primary/25"
+                >
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={!input.trim() && pendingAttachments.length === 0}
+                  aria-label="Enviar mensaje"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   <ArrowUp className="h-4 w-4" />
-                )}
-              </button>
+                </button>
+              )}
             </div>
           </div>
         </div>

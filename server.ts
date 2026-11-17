@@ -213,6 +213,13 @@ function parseGeminiError(err: unknown): {
       apiStatus: 'NOT_FOUND',
     };
   }
+  if (raw.includes('Timeout') || raw.includes('ETIMEDOUT') || raw.includes('AbortError')) {
+    return {
+      statusCode: 504,
+      userMessage: 'La respuesta tardó demasiado en responder. Inténtalo de nuevo o usa Motor: Edge Rápido.',
+      apiStatus: 'DEADLINE_EXCEEDED',
+    };
+  }
   return {
     statusCode: 500,
     userMessage: raw || 'Error inesperado al consultar Gemini.',
@@ -468,15 +475,287 @@ const readWebPageTool: FunctionDeclaration = {
 const launchDeviceAppTool: FunctionDeclaration = {
   name: 'launch_device_app',
   description:
-    'Prepara un botón de lanzamiento directo para abrir una aplicación instalada en el dispositivo del usuario.',
+    'Abre o hace clic automáticamente en una aplicación del dispositivo del usuario (como Spotify, WhatsApp, YouTube, Discord, Telegram, VS Code, Notion, etc.) y opcionalmente busca o reproduce contenido dentro de ella.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      appIdOrName: { type: Type.STRING },
+      appIdOrName: {
+        type: Type.STRING,
+        description: 'Nombre o ID de la aplicación (ej. Spotify, WhatsApp, YouTube).',
+      },
+      query: {
+        type: Type.STRING,
+        description:
+          'Opcional: canción, artista, playlist o término de búsqueda para abrir directamente en la app.',
+      },
+      preferWeb: {
+        type: Type.BOOLEAN,
+        description:
+          'Opcional: true si el usuario pidió abrir la versión web en el navegador.',
+      },
     },
     required: ['appIdOrName'],
   },
 };
+
+interface DeviceAppLaunchCandidate {
+  id: string;
+  name: string;
+  platform?: string;
+  launchUri?: string;
+  baseUrl?: string;
+  aliases?: string[];
+}
+
+const BUILTIN_DEVICE_APPS: DeviceAppLaunchCandidate[] = [
+  {
+    id: 'builtin-spotify',
+    name: 'Spotify',
+    platform: 'desktop',
+    launchUri: 'spotify://',
+    baseUrl: 'https://open.spotify.com',
+    aliases: ['spotify', 'espotify', 'spotifi', 'spotify web'],
+  },
+  {
+    id: 'builtin-whatsapp',
+    name: 'WhatsApp',
+    platform: 'mobile',
+    launchUri: 'whatsapp://send',
+    baseUrl: 'https://web.whatsapp.com',
+    aliases: ['whatsapp', 'wasap', 'wsp', 'whatsapp web'],
+  },
+  {
+    id: 'builtin-youtube',
+    name: 'YouTube',
+    platform: 'web',
+    launchUri: 'https://www.youtube.com',
+    baseUrl: 'https://www.youtube.com',
+    aliases: ['youtube', 'yt', 'yutub', 'youtube web'],
+  },
+  {
+    id: 'builtin-vscode',
+    name: 'Visual Studio Code',
+    platform: 'desktop',
+    launchUri: 'vscode://',
+    baseUrl: 'https://vscode.dev',
+    aliases: ['visual studio code', 'vscode', 'vs code', 'code'],
+  },
+  {
+    id: 'builtin-telegram',
+    name: 'Telegram',
+    platform: 'mobile',
+    launchUri: 'tg://',
+    baseUrl: 'https://web.telegram.org',
+    aliases: ['telegram', 'tg', 'telegram web'],
+  },
+  {
+    id: 'builtin-notion',
+    name: 'Notion',
+    platform: 'desktop',
+    launchUri: 'notion://',
+    baseUrl: 'https://www.notion.so',
+    aliases: ['notion'],
+  },
+  {
+    id: 'builtin-discord',
+    name: 'Discord',
+    platform: 'desktop',
+    launchUri: 'discord://',
+    baseUrl: 'https://discord.com/app',
+    aliases: ['discord', 'discord web'],
+  },
+  {
+    id: 'builtin-obsidian',
+    name: 'Obsidian',
+    platform: 'desktop',
+    launchUri: 'obsidian://open',
+    baseUrl: 'https://obsidian.md',
+    aliases: ['obsidian'],
+  },
+  {
+    id: 'builtin-calendar',
+    name: 'Google Calendar',
+    platform: 'web',
+    launchUri: 'https://calendar.google.com',
+    baseUrl: 'https://calendar.google.com',
+    aliases: ['google calendar', 'calendario', 'calendar'],
+  },
+];
+
+function normalizeAppLookupKey(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function findDeviceAppCandidate(
+  appIdOrName: string,
+  connectedApps: DeviceAppLaunchCandidate[]
+): DeviceAppLaunchCandidate | undefined {
+  const rawKey = normalizeAppLookupKey(appIdOrName);
+  const cleanKey = rawKey.replace(/\b(web|en navegador|navegador|app)\b/g, '').trim() || rawKey;
+  if (!cleanKey) return undefined;
+
+  const fromConnected = connectedApps.find((c) => {
+    const idNorm = normalizeAppLookupKey(c.id);
+    const nameNorm = normalizeAppLookupKey(c.name);
+    return (
+      idNorm === cleanKey ||
+      nameNorm === cleanKey ||
+      nameNorm.includes(cleanKey) ||
+      cleanKey.includes(nameNorm)
+    );
+  });
+  if (fromConnected) return fromConnected;
+
+  return BUILTIN_DEVICE_APPS.find((b) => {
+    const nameNorm = normalizeAppLookupKey(b.name);
+    if (nameNorm === cleanKey || nameNorm.includes(cleanKey)) return true;
+    return (b.aliases || []).some(
+      (alias) => alias === rawKey || alias === cleanKey || cleanKey === alias
+    );
+  });
+}
+
+function resolveDeviceAppLaunch(
+  args: { appIdOrName: string; query?: string; preferWeb?: boolean },
+  connectedApps: DeviceAppLaunchCandidate[]
+): {
+  ok: boolean;
+  action?: {
+    id: string;
+    name: string;
+    launchUri: string;
+    fallbackUri?: string;
+    query?: string;
+    autoClick: boolean;
+    platform?: string;
+  };
+  error?: string;
+} {
+  const target = findDeviceAppCandidate(args.appIdOrName, connectedApps);
+  if (!target) {
+    return {
+      ok: false,
+      error: 'No encontré esa aplicación en tu lista de dispositivo ni en el catálogo.',
+    };
+  }
+
+  const query = typeof args.query === 'string' ? args.query.trim().slice(0, 120) : '';
+  const preferWeb =
+    Boolean(args.preferWeb) || /\b(web|navegador)\b/i.test(args.appIdOrName);
+  const isSpotify =
+    normalizeAppLookupKey(target.name).includes('spotify') ||
+    (target.launchUri || '').toLowerCase().startsWith('spotify:');
+  const isYoutube =
+    normalizeAppLookupKey(target.name).includes('youtube') ||
+    (target.baseUrl || '').toLowerCase().includes('youtube.com');
+
+  let launchUri = target.launchUri || target.baseUrl || '';
+  let fallbackUri: string | undefined =
+    target.baseUrl && target.baseUrl !== launchUri ? target.baseUrl : undefined;
+
+  if (isSpotify) {
+    const nativeUri = query
+      ? `spotify:search:${encodeURIComponent(query)}`
+      : target.launchUri && !/^https?:\/\//i.test(target.launchUri)
+        ? target.launchUri
+        : 'spotify://';
+    const webUri = query
+      ? `https://open.spotify.com/search/${encodeURIComponent(query)}`
+      : target.baseUrl && /^https?:\/\//i.test(target.baseUrl)
+        ? target.baseUrl
+        : 'https://open.spotify.com';
+    launchUri = preferWeb ? webUri : nativeUri;
+    fallbackUri = preferWeb ? nativeUri : webUri;
+  } else if (isYoutube) {
+    const webUri = query
+      ? `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
+      : target.launchUri || target.baseUrl || 'https://www.youtube.com';
+    launchUri = webUri;
+    fallbackUri = undefined;
+  } else if (preferWeb && target.baseUrl) {
+    fallbackUri = target.launchUri && target.launchUri !== target.baseUrl ? target.launchUri : undefined;
+    launchUri = target.baseUrl;
+  }
+
+  if (!launchUri) {
+    return {
+      ok: false,
+      error: `La aplicación ${target.name} no tiene una URI de lanzamiento configurada.`,
+    };
+  }
+
+  return {
+    ok: true,
+    action: {
+      id: target.id,
+      name: target.name,
+      launchUri,
+      fallbackUri,
+      query: query || undefined,
+      autoClick: true,
+      platform: target.platform,
+    },
+  };
+}
+
+function detectDirectAppLaunchIntent(
+  rawMessage: string,
+  connectedApps: DeviceAppLaunchCandidate[]
+): { appIdOrName: string; query?: string; preferWeb?: boolean } | null {
+  const trimmed = rawMessage.trim();
+  if (!trimmed || trimmed.length > 120 || trimmed.includes('?')) return null;
+
+  const normalized = normalizeAppLookupKey(trimmed);
+  if (
+    /\b(explica|explicame|resume|resumeme|analiza|traduce|escribe un|programa|crea una app|como funciona)\b/.test(
+      normalized
+    )
+  ) {
+    return null;
+  }
+
+  const preferWeb = /\b(web|navegador|browser)\b/.test(normalized);
+
+  // e.g. "pon bad bunny en spotify", "busca lofi en youtube", "reproduce rock en spotify web"
+  const inAppMatch = trimmed.match(
+    /^(?:por\s+favor\s+)?(?:jarvis[,\s]+)?(?:pon(?:me)?|reproduce|busca|buscar|escuchar|toca|abre|abrir)\s+(.+?)\s+(?:en|dentro\s+de)\s+([a-z0-9áéíóúüñ ._-]+?)\s*$/i
+  );
+  if (inAppMatch) {
+    const rawQuery = inAppMatch[1]
+      .replace(/^(?:la\s+cancion\s+(?:de\s+)?|musica\s+(?:de\s+)?|algo\s+de\s+|un\s+video\s+de\s+)/i, '')
+      .trim();
+    const candidateApp = inAppMatch[2].trim();
+    if (findDeviceAppCandidate(candidateApp, connectedApps)) {
+      return {
+        appIdOrName: candidateApp,
+        query: rawQuery || undefined,
+        preferWeb,
+      };
+    }
+  }
+
+  // e.g. "dale clic en spotify", "abre spotify", "clic a spotify", "inicia whatsapp"
+  const directMatch = trimmed.match(
+    /^(?:por\s+favor\s+)?(?:jarvis[,\s]+)?(?:(?:dale|haz|hacer|darle)\s+cli[ck]\s+(?:en|a)|cli[ck]\s+(?:en|a)|abre|abrir|inicia|iniciar|lanza|lanzar|ejecuta|ejecutar|entra\s+a|pon(?:me)?)\s+(?:la\s+app\s+(?:de\s+)?|aplicacion\s+(?:de\s+)?)?([a-z0-9áéíóúüñ ._-]+?)\s*$/i
+  );
+  if (directMatch) {
+    const candidateApp = directMatch[1].trim();
+    if (findDeviceAppCandidate(candidateApp, connectedApps)) {
+      return { appIdOrName: candidateApp, preferWeb };
+    }
+  }
+
+  // bare "spotify" or "spotify web"
+  if (/^(?:jarvis[,\s]+)?spotify(?:\s+web)?$/i.test(normalized)) {
+    return { appIdOrName: 'Spotify', preferWeb };
+  }
+
+  return null;
+}
 
 async function startServer() {
   const app = express();
@@ -642,7 +921,7 @@ async function startServer() {
       `Memoria local disponible:\n${memorySummary}`,
       `Aplicaciones y routers del usuario:\n${appsContext}`,
       'Si el usuario adjunta fotos o capturas, analízalas con precisión y responde a su petición sobre ellas.',
-      'Si el usuario pide recordar algo, usa save_memory. Si pide cambiar de voz, usa switch_voice. Si pide cambiar de agente, usa switch_preset. Si pide abrir o lanzar una aplicación de su dispositivo, usa launch_device_app. Si pide listar o controlar sus apps, usa list_user_apps, toggle_app_status o execute_connected_app. Si pide leer un enlace web, usa read_web_page.',
+      'Si el usuario pide recordar algo, usa save_memory. Si pide cambiar de voz, usa switch_voice. Si pide cambiar de agente, usa switch_preset. Si pide abrir, lanzar, reproducir o darle clic a una aplicación (como Spotify, WhatsApp, YouTube, Discord, etc.), usa SIEMPRE launch_device_app inmediatamente (pasando query si pidió buscar/reproducir una canción o tema); la consola ejecutará el clic automático al instante. Si pide listar o controlar sus apps, usa list_user_apps, toggle_app_status o execute_connected_app. Si pide leer un enlace web, usa read_web_page.',
       'Responde en español claro, directo y cómodo de leer en voz alta.',
     ].join('\n\n');
 
@@ -704,9 +983,9 @@ async function startServer() {
       if (model === 'gemini-4-hydrogen') {
         cfg.thinkingConfig = {
           thinkingLevel:
-            engineRoute === 'low-latency-edge'
-              ? ThinkingLevel.LOW
-              : mapThinkingLevel(thinkingLevel),
+            engineRoute === 'cloud-reasoning'
+              ? mapThinkingLevel(thinkingLevel)
+              : ThinkingLevel.LOW,
         };
       }
       if (usesSearch) {
@@ -718,18 +997,13 @@ async function startServer() {
     const chatModelChain =
       engineRoute === 'cloud-reasoning'
         ? [
-            { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 14000 },
-            { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 9000 },
+            { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 3500 },
+            { model: 'gemini-3.1-flash-lite', retries: 0, timeoutMs: 10000 },
           ]
-        : engineRoute === 'local-first-hybrid' && thinkingLevel !== 'LOW'
-          ? [
-              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 5500 },
-              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 9000 },
-            ]
-          : [
-              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 8000 },
-              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 9000 },
-            ];
+        : [
+            { model: 'gemini-3.1-flash-lite', retries: 0, timeoutMs: 9000 },
+            { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 10000 },
+          ];
 
     return {
       rawMessage,
@@ -770,6 +1044,9 @@ async function startServer() {
         id: string;
         name: string;
         launchUri: string;
+        fallbackUri?: string;
+        query?: string;
+        autoClick?: boolean;
         platform?: string;
       }>;
       appStatusUpdates: Array<{
@@ -950,40 +1227,41 @@ async function startServer() {
         }
 
         if (name === 'launch_device_app') {
-          const key = String(args.appIdOrName || '').toLowerCase();
-          const target = ctx.connectedApps.find(
-            (c) => c.id.toLowerCase() === key || c.name.toLowerCase().includes(key)
+          const resolved = resolveDeviceAppLaunch(
+            {
+              appIdOrName: String(args.appIdOrName || ''),
+              query: typeof args.query === 'string' ? args.query : undefined,
+              preferWeb: Boolean(args.preferWeb),
+            },
+            ctx.connectedApps
           );
-          if (!target) {
+          if (!resolved.ok || !resolved.action) {
             return {
               functionResponse: {
                 id: call.id,
                 name,
                 response: {
                   ok: false,
-                  error: 'No encontré esa aplicación en tu lista de dispositivo.',
+                  error:
+                    resolved.error ||
+                    'No encontré esa aplicación en tu lista de dispositivo.',
                 },
               },
             };
           }
-          const uri = target.launchUri || target.baseUrl;
-          if (uri) {
-            stateOut.launchActions.push({
-              id: target.id,
-              name: target.name,
-              launchUri: uri,
-              platform: target.platform,
-            });
-          }
+
+          stateOut.launchActions.push(resolved.action);
           return {
             functionResponse: {
               id: call.id,
               name,
               response: {
-                ok: Boolean(uri),
-                name: target.name,
-                launchUri: uri,
-                note: 'Botón de apertura directa listo en la respuesta.',
+                ok: true,
+                name: resolved.action.name,
+                launchUri: resolved.action.launchUri,
+                fallbackUri: resolved.action.fallbackUri,
+                autoClickTriggered: true,
+                note: 'Clic automático enviado para abrir la aplicación y accesos listos en pantalla.',
               },
             },
           };
@@ -1028,6 +1306,9 @@ async function startServer() {
           id: string;
           name: string;
           launchUri: string;
+          fallbackUri?: string;
+          query?: string;
+          autoClick?: boolean;
           platform?: string;
         }>;
         appStatusUpdates: Array<{
@@ -1125,8 +1406,10 @@ async function startServer() {
       res.flushHeaders?.();
 
       let closed = false;
-      req.on('close', () => {
-        closed = true;
+      res.on('close', () => {
+        if (!res.writableFinished) {
+          closed = true;
+        }
       });
 
       const sendEvent = (payload: Record<string, unknown>) => {
@@ -1142,6 +1425,9 @@ async function startServer() {
           id: string;
           name: string;
           launchUri: string;
+          fallbackUri?: string;
+          query?: string;
+          autoClick?: boolean;
           platform?: string;
         }>;
         appStatusUpdates: Array<{
@@ -1171,12 +1457,14 @@ async function startServer() {
         for (const step of setup.chatModelChain) {
           if (closed) return null;
           let streamedAnyDelta = false;
+          const ac = new AbortController();
           try {
+            const cfg = setup.buildConfigForModel(step.model);
             const stream = await withTimeout(
               ai.models.generateContentStream({
                 model: step.model,
                 contents: roundContents,
-                config: setup.buildConfigForModel(step.model),
+                config: { ...cfg, abortSignal: ac.signal },
               }),
               step.timeoutMs,
               step.model
@@ -1192,14 +1480,35 @@ async function startServer() {
             let roundPromptTokens = 0;
             let roundOutputTokens = 0;
 
-            for await (const chunk of stream) {
-              if (closed) break;
+            const iterator = stream[Symbol.asyncIterator]();
+            while (true) {
+              if (closed) {
+                ac.abort();
+                break;
+              }
+              const chunkWaitMs = streamedAnyDelta ? 12000 : step.timeoutMs;
+              const nextStep = await withTimeout(
+                iterator.next(),
+                chunkWaitMs,
+                step.model
+              );
+              if (nextStep.done) break;
+              const chunk = nextStep.value;
+
+              let deltaText = '';
               const candParts = chunk.candidates?.[0]?.content?.parts;
               if (Array.isArray(candParts)) {
                 for (const part of candParts) {
                   roundParts.push(part as Record<string, unknown>);
+                  const p = part as { text?: string; thought?: boolean; functionCall?: unknown };
+                  if (typeof p.text === 'string' && p.text.length > 0 && !p.thought) {
+                    deltaText += p.text;
+                  }
                 }
+              } else if (typeof chunk.text === 'string' && chunk.text.length > 0) {
+                deltaText = chunk.text;
               }
+
               if (Array.isArray(chunk.functionCalls) && chunk.functionCalls.length > 0) {
                 for (const fc of chunk.functionCalls) {
                   roundCalls.push(fc);
@@ -1218,7 +1527,6 @@ async function startServer() {
                 roundOutputTokens = chunk.usageMetadata.candidatesTokenCount;
               }
 
-              const deltaText = chunk.text || '';
               if (deltaText) {
                 if (firstTokenMs === undefined) {
                   firstTokenMs = Date.now() - startTime;
@@ -1239,6 +1547,7 @@ async function startServer() {
               roundCalls,
             };
           } catch (err) {
+            ac.abort();
             lastErr = err;
             if (streamedAnyDelta) {
               throw err;
@@ -1247,6 +1556,38 @@ async function startServer() {
         }
         throw lastErr || new Error('No se pudo completar la respuesta.');
       };
+
+      const directIntent =
+        setup.validAttachments.length === 0
+          ? detectDirectAppLaunchIntent(setup.rawMessage, setup.connectedApps)
+          : null;
+
+      if (directIntent) {
+        const directResolved = resolveDeviceAppLaunch(directIntent, setup.connectedApps);
+        if (directResolved.ok && directResolved.action) {
+          stateOut.toolsUsed.push('launch_device_app');
+          stateOut.launchActions.push(directResolved.action);
+          const instantReply = directResolved.action.query
+            ? `Listo, abriendo "${directResolved.action.query}" en ${directResolved.action.name}.`
+            : `Listo, haciendo clic para abrir ${directResolved.action.name}.`;
+          sendEvent({ delta: instantReply });
+          sendEvent({
+            done: true,
+            reply: instantReply,
+            modelUsed: 'instant-action-router',
+            latencyMs: Date.now() - startTime,
+            firstTokenMs: Date.now() - startTime,
+            promptTokens: 0,
+            outputTokens: 0,
+            toolsUsed: ['launch_device_app'],
+            addedMemories: [],
+            appStatusUpdates: [],
+            launchActions: stateOut.launchActions,
+            sources: [],
+          });
+          return;
+        }
+      }
 
       const currentContents = [...setup.contents];
       for (let round = 0; round < 3; round++) {
@@ -1264,9 +1605,13 @@ async function startServer() {
           setup,
           stateOut
         );
+        const modelParts =
+          roundRes.roundParts.length > 0
+            ? (roundRes.roundParts as Content['parts'])
+            : (roundRes.roundCalls.map((fc) => ({ functionCall: fc })) as Content['parts']);
         currentContents.push({
           role: 'model',
-          parts: roundRes.roundParts as Content['parts'],
+          parts: modelParts,
         });
         currentContents.push({
           role: 'user',
@@ -1302,7 +1647,6 @@ async function startServer() {
           nextPreset: stateOut.nextPreset,
           sources,
         });
-        res.end();
       }
     } catch (err) {
       const parsed = parseGeminiError(err);
@@ -1310,6 +1654,9 @@ async function startServer() {
         res.status(parsed.statusCode).json({ error: parsed.userMessage });
       } else if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ error: parsed.userMessage })}\n\n`);
+      }
+    } finally {
+      if (res.headersSent && !res.writableEnded) {
         res.end();
       }
     }
@@ -1984,16 +2331,16 @@ async function startServer() {
         ? `Lee este repositorio de GitHub y realiza su aplicación web completa y funcional:\n\nINSTRUCCIONES DEL USUARIO:\n${effectivePrompt}\n\n${repoPromptBlock}`
         : `Crea una aplicación web completa y funcional basada en este prompt:\n\n${effectivePrompt}`;
 
-      const timeoutMs = hasRepo ? 45000 : 25000;
+      const timeoutMs = hasRepo ? 40000 : 22000;
       const modelChain =
-        engineRoute === 'low-latency-edge' && !hasRepo
+        engineRoute === 'cloud-reasoning'
           ? [
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs },
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 8000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs },
             ]
           : [
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs },
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 15000 },
             ];
 
       const { result: response, modelUsed } = await callWithRetryAndFallback(
@@ -2076,8 +2423,8 @@ async function startServer() {
       const ai = getAiClient();
       const { result: response, modelUsed } = await callWithRetryAndFallback(
         [
-          { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 24000 },
-          { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 25000 },
+          { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 22000 },
+          { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 12000 },
         ],
         (model) =>
           ai.models.generateContent({
@@ -2336,12 +2683,12 @@ async function startServer() {
       const modelChain =
         engineRoute === 'cloud-reasoning'
           ? [
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 20000 },
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 25000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 7000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 18000 },
             ]
           : [
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 25000 },
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 20000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 18000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 12000 },
             ];
 
       const { result: response, modelUsed } = await callWithRetryAndFallback(
@@ -2593,12 +2940,12 @@ async function startServer() {
       const modelChain =
         engineRoute === 'cloud-reasoning'
           ? [
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 18000 },
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 20000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 7000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 16000 },
             ]
           : [
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 20000 },
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 18000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 16000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 12000 },
             ];
 
       const { result: response, modelUsed } = await callWithRetryAndFallback(
@@ -2878,12 +3225,12 @@ async function startServer() {
       const modelChain =
         engineRoute === 'cloud-reasoning'
           ? [
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 18000 },
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 18000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 7000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 15000 },
             ]
           : [
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 18000 },
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 18000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 15000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 12000 },
             ];
 
       const { result: response, modelUsed } = await callWithRetryAndFallback(
@@ -2969,12 +3316,12 @@ async function startServer() {
       const modelChain =
         engineRoute === 'cloud-reasoning'
           ? [
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 20000 },
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 20000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 7000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 16000 },
             ]
           : [
-              { model: 'gemini-3.1-flash-lite', retries: 2, timeoutMs: 20000 },
-              { model: 'gemini-4-hydrogen', retries: 1, timeoutMs: 20000 },
+              { model: 'gemini-3.1-flash-lite', retries: 1, timeoutMs: 16000 },
+              { model: 'gemini-4-hydrogen', retries: 0, timeoutMs: 12000 },
             ];
 
       const readerPrompt = extracted

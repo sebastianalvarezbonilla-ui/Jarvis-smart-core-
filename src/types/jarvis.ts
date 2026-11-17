@@ -65,6 +65,10 @@ export interface LaunchAction {
   id: string;
   name: string;
   launchUri: string;
+  fallbackUri?: string;
+  query?: string;
+  autoClick?: boolean;
+  autoClicked?: boolean;
   platform?: string;
 }
 
@@ -74,6 +78,14 @@ export interface ChatImageAttachment {
   mimeType: string;
   data: string;
   previewUrl?: string;
+}
+
+export interface VerificationMeta {
+  status: 'verified' | 'insufficient_data' | 'workspace_action';
+  provider: 'google-search' | 'reliable-sources' | 'workspace-data' | 'none';
+  checkedSourcesCount: number;
+  summary: string;
+  reviewed: boolean;
 }
 
 export interface ChatMessage {
@@ -90,6 +102,7 @@ export interface ChatMessage {
   toolsUsed?: string[];
   sources?: ChatSource[];
   launchActions?: LaunchAction[];
+  verification?: VerificationMeta;
   attachments?: ChatImageAttachment[];
   audioBase64?: string;
   voiceUsed?: VoiceId;
@@ -485,13 +498,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Consola general y voz',
     yamlName: 'chat-simple.yaml',
     description:
-      'Respuestas ágiles de baja latencia para consultas rápidas, memoria y control por voz.',
+      'Respuestas ágiles verificadas en Google y fuentes confiables, con memoria y control por voz.',
     thinkingLevel: 'LOW',
-    usesSearch: false,
-    skills: ['Respuesta rápida', 'Memoria local', 'Control de apps'],
+    usesSearch: true,
+    skills: ['Google + Fuentes', 'Verificación de datos', 'Control de apps'],
     recommendedVoice: 'Charon',
     systemPrompt:
-      'Eres Jarvis, una consola personal de IA con memoria y herramientas integradas. Responde en español de forma clara, concisa y práctica, optimizada tanto para lectura visual como para síntesis de voz.',
+      'Eres Jarvis, una consola personal de IA con memoria y herramientas integradas. Revisa tus respuestas contra Google y fuentes confiables, nunca inventes datos y responde en español de forma clara y directa.',
   },
   {
     id: 'estratega',
@@ -499,13 +512,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Planificación y prioridades',
     yamlName: 'estratega.yaml',
     description:
-      'Convierte objetivos difusos en planes con bloques de tiempo y criterios claros de cierre.',
+      'Convierte objetivos difusos en planes con bloques de tiempo, datos verificados y criterios de cierre.',
     thinkingLevel: 'MEDIUM',
-    usesSearch: false,
-    skills: ['Priorización', 'Planes de 3 bloques', 'Decisiones'],
+    usesSearch: true,
+    skills: ['Priorización', 'Google + Fuentes', 'Decisiones'],
     recommendedVoice: 'Charon',
     systemPrompt:
-      'Eres el agente Estratega de Jarvis. Ordena por impacto y esfuerzo, propone planes con bloques concretos y señala el primer paso accionable. Evita listas largas sin criterio ni fecha.',
+      'Eres el agente Estratega de Jarvis. Ordena por impacto y esfuerzo, fundamenta datos externos con Google y fuentes confiables, y nunca inventes cifras ni fechas sin respaldo.',
   },
   {
     id: 'code-assistant',
@@ -513,13 +526,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Código y sistemas',
     yamlName: 'code-assistant.yaml',
     description:
-      'Diseña, revisa y depura código con criterio de producción, arquitectura y explicaciones breves.',
+      'Diseña, revisa y depura código verificando documentación oficial y fuentes confiables.',
     thinkingLevel: 'HIGH',
-    usesSearch: false,
-    skills: ['Depuración', 'Arquitectura', 'Revisión de código'],
+    usesSearch: true,
+    skills: ['Depuración', 'Docs oficiales', 'Revisión de código'],
     recommendedVoice: 'Kore',
     systemPrompt:
-      'Eres el agente Ingeniero de software senior de Jarvis. Analizas código, arquitectura full-stack y sistemas con rigor técnico. Da soluciones concretas, muestra código limpio y señala riesgos.',
+      'Eres el agente Ingeniero de software senior de Jarvis. Analizas código y sistemas verificando documentación oficial y fuentes técnicas confiables sin suposiciones ni APIs inventadas.',
   },
   {
     id: 'deep-research',
@@ -527,13 +540,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Búsqueda y síntesis web',
     yamlName: 'deep-research.yaml',
     description:
-      'Rastrea fuentes actuales en Google Search, contrasta y devuelve una síntesis verificada.',
+      'Rastrea fuentes actuales en Google Search y referencias confiables, contrasta y verifica cada dato.',
     thinkingLevel: 'HIGH',
     usesSearch: true,
-    skills: ['Búsqueda web', 'Síntesis', 'Verificación'],
+    skills: ['Búsqueda Google', 'Fuentes confiables', 'Auditoría de datos'],
     recommendedVoice: 'Puck',
     systemPrompt:
-      'Eres el agente Investigador de Jarvis. Utiliza Google Search cuando necesites datos actuales o verificación externa, distingue hechos de estimaciones y resume lo esencial primero.',
+      'Eres el agente Investigador de Jarvis. Utiliza Google Search y fuentes confiables verificadas para toda consulta, distingue hechos de estimaciones y no respondas sin datos comprobables.',
   },
   {
     id: 'daily-briefing',
@@ -541,13 +554,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Resumen ejecutivo',
     yamlName: 'daily-briefing.yaml',
     description:
-      'Resúmenes estructurados cruzando tu memoria personal, apps conectadas y estado de red.',
+      'Resúmenes estructurados cruzando tu memoria personal, fuentes verificadas y estado de red.',
     thinkingLevel: 'MEDIUM',
-    usesSearch: false,
-    skills: ['Memoria personal', 'Síntesis ejecutiva', 'Lectura por voz'],
+    usesSearch: true,
+    skills: ['Memoria personal', 'Google + Fuentes', 'Lectura por voz'],
     recommendedVoice: 'Zephyr',
     systemPrompt:
-      'Eres el agente de Briefing Diario de Jarvis. Revisa la memoria personal y los sistemas del usuario para generar resúmenes ejecutivos breves, accionables y cómodos de escuchar.',
+      'Eres el agente de Briefing Diario de Jarvis. Revisa la memoria personal, los sistemas del usuario y fuentes verificadas para generar resúmenes ejecutivos breves sin inventar información.',
   },
   {
     id: 'scheduled-monitor',
@@ -555,13 +568,13 @@ export const AGENT_PRESETS: AgentPreset[] = [
     roleTitle: 'Supervisión y trazas',
     yamlName: 'scheduled-monitor.yaml',
     description:
-      'Supervisión de estado, trazas de latencia, consumo energético, router y conectores.',
+      'Supervisión de estado, trazas de latencia, consumo energético, router y fuentes técnicas.',
     thinkingLevel: 'MEDIUM',
-    usesSearch: false,
+    usesSearch: true,
     skills: ['Telemetría', 'Salud de red', 'Auditoría'],
     recommendedVoice: 'Fenrir',
     systemPrompt:
-      'Eres el agente Monitor de Jarvis. Evalúas métricas de latencia, tokens, consumo energético estimado y estado de redes y aplicaciones con precisión operativa.',
+      'Eres el agente Monitor de Jarvis. Evalúas métricas reales de latencia, tokens, consumo energético y red basándote estrictamente en datos verificados.',
   },
 ];
 
